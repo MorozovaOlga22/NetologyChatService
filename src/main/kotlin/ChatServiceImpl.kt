@@ -8,12 +8,12 @@ class ChatServiceImpl : ChatService {
 
     //Функции сервиса
     override fun getChats(userId: Int) =
-        chats.filter { chat -> isUserInChat(userId, chat) }
+        chats.filter { chat -> chat.isUserInChat(userId) }
 
     override fun getUnreadChatsCount(userId: Int) =
         getChats(userId)
             .filter { chat ->
-                chat.messages.any { message -> isMessageUnreadByUser(userId, message) }
+                chat.messages.any { message -> message.isMessageUnreadByUser(userId) }
             }
 
     override fun readMessages(chatId: Int, userId: Int, firstMessageId: Int, messagesCount: Int): List<Message> {
@@ -21,8 +21,8 @@ class ChatServiceImpl : ChatService {
             throw IllegalArgumentException("The number of messages returned cannot be <= 0")
         }
 
-        val chat = getChat(chatId)
-        checkUserInChat(userId, chat)
+        val chat = chats.getChat(chatId)
+        chat.checkUserInChat(userId)
 
         val firstMessageIndex = chat.messages.indexOfFirst { message -> message.messageId == firstMessageId }
         if (firstMessageIndex < 0) {
@@ -41,12 +41,12 @@ class ChatServiceImpl : ChatService {
     }
 
     override fun createMessage(chatId: Int, senderId: Int, messageText: String) {
-        val chat = getChat(chatId)
-        checkUserInChat(senderId, chat)
+        val chat = chats.getChat(chatId)
+        chat.checkUserInChat(senderId)
 
         val newMessage = Message(
             messageId = nextMessageId++,
-            addresseeId = getAddresseeId(chat, senderId),
+            addresseeId = chat.getAddresseeId(senderId),
             senderId = senderId,
             text = messageText
         )
@@ -55,8 +55,8 @@ class ChatServiceImpl : ChatService {
     }
 
     override fun changeMessage(chatId: Int, senderId: Int, messageId: Int, newMessageText: String) {
-        val chat = getChat(chatId)
-        checkUserInChat(senderId, chat)
+        val chat = chats.getChat(chatId)
+        chat.checkUserInChat(senderId)
 
         val message = chat.messages
             .find { message -> message.messageId == messageId } ?: throw MessageNotFoundException(chatId, messageId)
@@ -69,8 +69,8 @@ class ChatServiceImpl : ChatService {
     }
 
     override fun deleteMessage(chatId: Int, userId: Int, messageId: Int) {
-        val chat = getChat(chatId)
-        checkUserInChat(userId, chat)
+        val chat = chats.getChat(chatId)
+        chat.checkUserInChat(userId)
 
         val isMessageRemoved = chat.messages.removeIf { message -> message.messageId == messageId }
         if (!isMessageRemoved) {
@@ -83,7 +83,7 @@ class ChatServiceImpl : ChatService {
     }
 
     override fun createChat(senderId: Int, addresseeId: Int, messageText: String) {
-        if (chats.any { chat -> isUserInChat(senderId, chat) && isUserInChat(addresseeId, chat) }) {
+        if (chats.any { chat -> chat.isUserInChat(senderId) && chat.isUserInChat(addresseeId) }) {
             throw ChatAlreadyExistsException(senderId, addresseeId)
         }
 
@@ -104,29 +104,29 @@ class ChatServiceImpl : ChatService {
     }
 
     override fun deleteChat(chatId: Int, userId: Int) {
-        val chat = getChat(chatId)
-        checkUserInChat(userId, chat)
+        val chat = chats.getChat(chatId)
+        chat.checkUserInChat(userId)
 
         chats.remove(chat)
     }
 
 
     //Вспомогательные функции
-    private fun isUserInChat(userId: Int, chat: Chat) =
-        chat.user1Id == userId || chat.user2Id == userId
+    private fun Chat.isUserInChat(userId: Int) =
+        user1Id == userId || user2Id == userId
 
-    private fun isMessageUnreadByUser(userId: Int, message: Message) =
-        !message.isRead && message.addresseeId == userId
+    private fun Message.isMessageUnreadByUser(userId: Int) =
+        !isRead && addresseeId == userId
 
-    private fun getChat(chatId: Int) =
-        chats.firstOrNull { chat -> chat.chatId == chatId } ?: throw ChatNotFoundException(chatId)
+    private fun ArrayList<Chat>.getChat(chatId: Int) =
+        firstOrNull { chat -> chat.chatId == chatId } ?: throw ChatNotFoundException(chatId)
 
-    private fun checkUserInChat(userId: Int, chat: Chat) {
-        if (!isUserInChat(userId, chat)) {
-            throw UserNotInChatException(userId, chat.chatId)
+    private fun Chat.checkUserInChat(userId: Int) {
+        if (!isUserInChat(userId)) {
+            throw UserNotInChatException(userId, chatId)
         }
     }
 
-    private fun getAddresseeId(chat: Chat, senderId: Int) =
-        if (chat.user1Id == senderId) chat.user2Id else chat.user1Id
+    private fun Chat.getAddresseeId(senderId: Int) =
+        if (user1Id == senderId) user2Id else user1Id
 }
