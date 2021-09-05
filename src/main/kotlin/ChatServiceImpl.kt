@@ -8,76 +8,83 @@ class ChatServiceImpl : ChatService {
 
     //Функции сервиса
     override fun getChats(userId: Int) =
-        chats.filter { chat -> chat.isUserInChat(userId) }
+        getUserChatsSequence(userId)
+            .toList()
 
     override fun getUnreadChatsCount(userId: Int) =
-        getChats(userId)
+        getUserChatsSequence(userId)
             .filter { chat ->
                 chat.messages.any { message -> message.isMessageUnreadByUser(userId) }
             }
+            .toList()
 
     override fun readMessages(chatId: Int, userId: Int, firstMessageId: Int, messagesCount: Int): List<Message> {
         if (messagesCount <= 0) {
             throw IllegalArgumentException("The number of messages returned cannot be <= 0")
         }
 
-        val chat = chats.getChat(chatId)
-        chat.checkUserInChat(userId)
+        val messages = chats.getUserChat(chatId, userId).messages
 
-        val firstMessageIndex = chat.messages.indexOfFirst { message -> message.messageId == firstMessageId }
-        if (firstMessageIndex < 0) {
-            throw MessageNotFoundException(chatId, firstMessageId)
-        }
-
-        val lastMessageIndex = min(firstMessageIndex + messagesCount, chat.messages.size)
-        val resultMessages = chat.messages.subList(firstMessageIndex, lastMessageIndex)
-
-        resultMessages.forEach { message ->
-            if (message.addresseeId == userId) {
-                message.isRead = true
+        val firstMessageIndex = messages.indexOfFirst { message -> message.messageId == firstMessageId }
+            .let { firstMessageIndex ->
+                if (firstMessageIndex < 0) {
+                    throw MessageNotFoundException(chatId, firstMessageId)
+                }
+                firstMessageId
             }
-        }
-        return resultMessages
+
+        val lastMessageIndex = min(firstMessageIndex + messagesCount, messages.size)
+
+        return messages.subList(firstMessageIndex, lastMessageIndex)
+            .asSequence()
+            .map { message ->
+                if (message.addresseeId == userId) {
+                    message.isRead = true
+                }
+                message
+            }
+            .toList()
     }
 
     override fun createMessage(chatId: Int, senderId: Int, messageText: String) {
-        val chat = chats.getChat(chatId)
-        chat.checkUserInChat(senderId)
+        chats.getUserChat(chatId, senderId)
+            .also { chat ->
+                val newMessage = Message(
+                    messageId = nextMessageId++,
+                    addresseeId = chat.getAddresseeId(senderId),
+                    senderId = senderId,
+                    text = messageText
+                )
 
-        val newMessage = Message(
-            messageId = nextMessageId++,
-            addresseeId = chat.getAddresseeId(senderId),
-            senderId = senderId,
-            text = messageText
-        )
-
-        chat.messages += newMessage
+                chat.messages += newMessage
+            }
     }
 
     override fun changeMessage(chatId: Int, senderId: Int, messageId: Int, newMessageText: String) {
-        val chat = chats.getChat(chatId)
-        chat.checkUserInChat(senderId)
-
-        val message = chat.messages
-            .find { message -> message.messageId == messageId } ?: throw MessageNotFoundException(chatId, messageId)
-
-        if (message.senderId != senderId) {
-            throw UserNotSenderException(senderId, messageId)
-        }
-
-        message.text = newMessageText
+        chats.getUserChat(chatId, senderId).messages
+            .asSequence()
+            .filter { message -> message.messageId == messageId }
+            .ifEmpty { throw MessageNotFoundException(chatId, messageId) }
+            .first()
+            .also { message ->
+                if (message.senderId != senderId) {
+                    throw UserNotSenderException(senderId, messageId)
+                }
+                message.text = newMessageText
+            }
     }
 
     override fun deleteMessage(chatId: Int, userId: Int, messageId: Int) {
-        val chat = chats.getChat(chatId)
-        chat.checkUserInChat(userId)
+        val messages = chats.getUserChat(chatId, userId).messages
 
-        val isMessageRemoved = chat.messages.removeIf { message -> message.messageId == messageId }
-        if (!isMessageRemoved) {
-            throw MessageNotFoundException(chatId, messageId)
-        }
+        messages.removeIf { message -> message.messageId == messageId }
+            .also { isMessageRemoved ->
+                if (!isMessageRemoved) {
+                    throw MessageNotFoundException(chatId, messageId)
+                }
+            }
 
-        if (chat.messages.isEmpty()) {
+        if (messages.isEmpty()) {
             deleteChat(chatId, userId)
         }
     }
@@ -87,45 +94,50 @@ class ChatServiceImpl : ChatService {
             throw ChatAlreadyExistsException(senderId, addresseeId)
         }
 
-        val newChat = Chat(
+        Chat(
             chatId = nextChatId++,
             user1Id = senderId,
             user2Id = addresseeId
-        )
-        chats.add(newChat)
-
-        val newMessage = Message(
-            messageId = nextMessageId++,
-            addresseeId = addresseeId,
-            senderId = senderId,
-            text = messageText
-        )
-        newChat.messages.add(newMessage)
+        ).also { chat ->
+            chat.messages.add(
+                Message(
+                    messageId = nextMessageId++,
+                    addresseeId = addresseeId,
+                    senderId = senderId,
+                    text = messageText
+                )
+            )
+            chats.add(chat)
+        }
     }
 
     override fun deleteChat(chatId: Int, userId: Int) {
-        val chat = chats.getChat(chatId)
-        chat.checkUserInChat(userId)
-
+        val chat = chats.getUserChat(chatId, userId)
         chats.remove(chat)
     }
 
 
     //Вспомогательные функции
+    private fun getUserChatsSequence(userId: Int) =
+        chats.asSequence()
+            .filter { chat -> chat.isUserInChat(userId) }
+
     private fun Chat.isUserInChat(userId: Int) =
         user1Id == userId || user2Id == userId
 
     private fun Message.isMessageUnreadByUser(userId: Int) =
         !isRead && addresseeId == userId
 
-    private fun ArrayList<Chat>.getChat(chatId: Int) =
-        firstOrNull { chat -> chat.chatId == chatId } ?: throw ChatNotFoundException(chatId)
-
-    private fun Chat.checkUserInChat(userId: Int) {
-        if (!isUserInChat(userId)) {
-            throw UserNotInChatException(userId, chatId)
-        }
-    }
+    private fun ArrayList<Chat>.getUserChat(chatId: Int, userId: Int) =
+        filter { chat -> chat.chatId == chatId }
+            .ifEmpty { throw ChatNotFoundException(chatId) }
+            .first()
+            .let { chat ->
+                if (!chat.isUserInChat(userId)) {
+                    throw UserNotInChatException(userId, chatId)
+                }
+                chat
+            }
 
     private fun Chat.getAddresseeId(senderId: Int) =
         if (user1Id == senderId) user2Id else user1Id
